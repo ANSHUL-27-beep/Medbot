@@ -2,7 +2,7 @@ from medical_bot import MedicalBot
 
 def main():
     # Initialize the medical bot with the PDF file
-    pdf_path = "The_Gale_Encyclopedia_of_Science_6th_edi.pdf"
+    pdf_path = "Gale Encyclopedia of Medicine. Vol. 2. 2nd ed.pdf"
     bot = MedicalBot(pdf_path)
     
     print("Medical Bot initialized successfully!")
@@ -19,4 +19,4 @@ def main():
         print("\nAnswer:", answer)
 
 if __name__ == "__main__":
-    main() 
+    main()
