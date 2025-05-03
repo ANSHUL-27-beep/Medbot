@@ -1,9 +1,12 @@
 from medical_bot import MedicalBot
 
 def main():
-    # Initialize the medical bot with the PDF file
-    pdf_path = "Gale Encyclopedia of Medicine. Vol. 2. 2nd ed.pdf"
-    bot = MedicalBot(pdf_path)
+    # Initialize the medical bot with both PDF files
+    pdf_paths = [
+        "Gale Encyclopedia of Medicine. Vol. 2. 2nd ed.pdf",
+        "Gale Encyclopedia of Medicine. Vol. 1. 2nd ed (1).pdf"
+    ]
+    bot = MedicalBot(pdf_paths)
     
     print("Medical Bot initialized successfully!")
     print("You can now ask medical questions. Type 'exit' to quit.")
