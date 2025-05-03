@@ -91,40 +91,29 @@ class MedicalBot:
         previous_questions = [item["question"] for item in self.query_history]
         
         # Use a simpler approach for small datasets
-        if len(previous_questions) < 10:
-            # Simple keyword matching for small datasets
-            keywords = question.lower().split()
-            similar_queries = []
-            
-            for i, prev_q in enumerate(previous_questions):
-                prev_keywords = prev_q.lower().split()
-                common_keywords = set(keywords) & set(prev_keywords)
-                if len(common_keywords) >= 2:  # At least 2 common keywords
-                    similar_queries.append(self.query_history[i])
-            
-            return similar_queries[:limit]
+        tfidf_matrix = self.vectorizer.fit_transform(previous_questions)
+        question_vec = self.vectorizer.transform([question])
+        similarities = cosine_similarity(question_vec, tfidf_matrix).flatten()
         
-        # For larger datasets, use TF-IDF
-        try:
-            question_vectors = self.vectorizer.fit_transform(previous_questions)
-            current_vector = self.vectorizer.transform([question])
-            similarities = cosine_similarity(current_vector, question_vectors).flatten()
-            top_indices = np.argsort(similarities)[-limit:][::-1]
-            
-            similar_queries = []
-            for idx in top_indices:
-                if similarities[idx] > 0.3:  # Only include if similarity is above threshold
-                    similar_queries.append(self.query_history[idx])
-            
-            return similar_queries
-        except Exception as e:
-            print(f"Error finding similar queries: {str(e)}")
-            return []
+        # Get indices of top matching queries
+        similar_indices = similarities.argsort()[-limit:][::-1]
+        similar_queries = []
+        for idx in similar_indices:
+            similar_queries.append(self.query_history[idx])
         
+        return similar_queries
+
     def setup(self):
         """Initialize the bot by loading and processing the PDF"""
-        # Check if cached data exists
         cache_file = "medical_bot_cache.pkl"
+        # Remove old cache to ensure new PDF is processed
+        if os.path.exists(cache_file):
+            try:
+                os.remove(cache_file)
+                print("Old cache removed. Reprocessing PDF.")
+            except Exception as e:
+                print(f"Error removing old cache: {e}")
+        # Check if cached data exists
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'rb') as f:
@@ -207,315 +196,119 @@ class MedicalBot:
             http_async_client=http_async_client
         )
         
-        # Create prompt template for PDF content
-        pdf_prompt_template = """You are a friendly and knowledgeable medical assistant having a conversation with a patient. 
-        Provide a clear, concise, and detailed answer to the question using the provided context.
-        
-        Guidelines:
-        1. Start with a direct answer to the question in 1-2 sentences.
-        2. Then provide 2-3 key details or explanations that support your answer.
-        3. Use simple language and avoid medical jargon unless necessary.
-        4. If you use medical terms, explain them briefly.
-        5. Keep your response focused and to the point.
-        6. If you don't have information about the topic, say "I don't have information about that."
-
-        Context: {context}
-
-        Question: {question}
-
-        Answer:"""
-        
-        # Create prompt template for Wikipedia content
-        wiki_prompt_template = """You are a friendly and knowledgeable medical assistant having a conversation with a patient. 
-        Provide a clear, concise, and detailed answer to the question using the provided Wikipedia content.
-        
-        Guidelines:
-        1. Start with a direct answer to the question in 1-2 sentences.
-        2. Then provide 2-3 key details or explanations that support your answer.
-        3. Use simple language and avoid medical jargon unless necessary.
-        4. If you use medical terms, explain them briefly.
-        5. Keep your response focused and to the point.
-        6. If you don't have information about the topic, say "I don't have information about that."
-
-        Wikipedia Content: {context}
-
-        Question: {question}
-
-        Answer:"""
-        
-        # Create prompt templates
+        # Define prompt for PDF answer
+        pdf_prompt_template = (
+            "Use the following medical text to answer the question in a clear, human-like, and concise way. "
+            "Do not be too brief or too detailed. Make the answer just long enough for the user to understand everything important, but avoid unnecessary information.\n"
+            "Text: {context}\n\n"
+            "Question: {question}\n"
+            "Answer:"
+        )
         self.pdf_prompt = PromptTemplate(
             template=pdf_prompt_template,
             input_variables=["context", "question"]
         )
         
-        self.wiki_prompt = PromptTemplate(
-            template=wiki_prompt_template,
-            input_variables=["context", "question"]
-        )
-        
-        # Create LLM chain
+        # Set up question-answering chain
         self.qa_chain = LLMChain(
             llm=llm,
-            prompt=self.pdf_prompt
+            prompt=self.pdf_prompt,
+            verbose=False
         )
 
-    def get_wikipedia_content(self, query: str) -> str:
-        """Search Wikipedia for relevant medical information"""
-        # Check cache first
-        if query in self.wiki_cache:
-            print(f"Using cached Wikipedia content for: {query}")
-            return self.wiki_cache[query]
-        
-        try:
-            query = query.lower().strip()
-            
-            # Extract key terms from the query
-            common_words = ["what", "is", "are", "the", "and", "for", "with", "about", "how", "why", "when", "where", "who", "which", "can", "you", "tell", "me", "more", "about", "explain", "describe", "list", "name", "give", "show", "provide", "information", "on", "regarding", "concerning", "related", "to", "same", "it", "this", "that", "these", "those", "they", "them", "their", "its"]
-            key_terms = [word for word in query.split() if word not in common_words and len(word) > 2]
-            
-            # If we have key terms, use them for searching
-            if key_terms:
-                search_term = " ".join(key_terms)
-            else:
-                search_term = query
-            
-            # Try direct search first (faster)
-            try:
-                page = wikipedia.page(search_term, auto_suggest=False)
-                content = page.summary + "\n\n" + page.content[:500]
-                self.wiki_cache[query] = content
-                print(f"Found direct Wikipedia match for: {search_term}")
-                return content
-            except:
-                # If direct search fails, try with search
-                search_queries = [
-                    search_term,
-                    f"{search_term} (medical)",
-                    f"{search_term} disease",
-                    f"{search_term} condition",
-                    f"{search_term} health"
-                ]
-                
-                all_results = []
-                for search_query in search_queries:
-                    try:
-                        results = wikipedia.search(search_query, results=2)  # Reduced from 3
-                        all_results.extend(results)
-                    except:
-                        continue
-                
-                all_results = list(dict.fromkeys(all_results))
-                
-                if not all_results:
-                    self.wiki_cache[query] = ""
-                    return ""
-                
-                medical_categories = [
-                    'health', 'medical', 'medicine', 'disease', 'condition',
-                    'symptom', 'treatment', 'diagnosis', 'pathology', 'physiology',
-                    'anatomy', 'surgery', 'therapy', 'pharmacology', 'epidemiology',
-                    'infectious disease', 'chronic condition', 'mental health',
-                    'public health', 'clinical medicine'
-                ]
-                
-                best_content = ""
-                best_score = 0
-                
-                for result in all_results:
-                    try:
-                        page = wikipedia.page(result, auto_suggest=False)
-                        category_score = sum(
-                            1 for category in page.categories
-                            if any(term in category.lower() for term in medical_categories)
-                        )
-                        title_score = 1 if search_term in page.title.lower() else 0
-                        summary_score = 1 if search_term in page.summary.lower() else 0
-                        total_score = category_score + title_score + summary_score
-                        
-                        if total_score > best_score:
-                            content = page.summary + "\n\n"
-                            sections = []
-                            for section in page.sections:
-                                if search_term in section.lower():
-                                    try:
-                                        section_content = page.section(section)
-                                        if section_content:
-                                            sections.append(f"{section}:\n{section_content}")
-                                    except:
-                                        continue
-                            
-                            content += "\n\n".join(sections[:1])  # Reduced from 2
-                            main_content = page.content[:500]  # Reduced from 1000
-                            if main_content:
-                                content += f"\n\nAdditional Information:\n{main_content}"
-                            
-                            best_content = content
-                            best_score = total_score
-                            
-                    except wikipedia.exceptions.DisambiguationError as e:
-                        try:
-                            options = e.options
-                            for option in options:
-                                if any(term in option.lower() for term in medical_categories):
-                                    try:
-                                        page = wikipedia.page(option, auto_suggest=False)
-                                        if any(term in category.lower() for term in medical_categories 
-                                              for category in page.categories):
-                                            content = page.summary + "\n\n" + page.content[:500]  # Reduced from 1000
-                                            self.wiki_cache[query] = content
-                                            return content
-                                    except:
-                                        continue
-                        except:
-                            continue
-                    except:
-                        continue
-                
-                self.wiki_cache[query] = best_content
-                return best_content
-                
-        except:
-            self.wiki_cache[query] = ""
-            return ""
-
-    def find_relevant_context(self, question: str) -> str:
-        """Find relevant context using TF-IDF and cosine similarity"""
-        try:
-            # Clean the question
-            cleaned_question = re.sub(r'\s+', ' ', question.lower()).strip()
-            
-            # Extract key terms from the question (remove common words)
-            common_words = ["what", "is", "are", "the", "and", "for", "with", "about", "how", "why", "when", "where", "who", "which", "can", "you", "tell", "me", "more", "about", "explain", "describe", "list", "name", "give", "show", "provide", "information", "on", "regarding", "concerning", "related", "to", "same", "it", "this", "that", "these", "those", "they", "them", "their", "its"]
-            question_terms = [word for word in cleaned_question.split() if word not in common_words and len(word) > 2]
-            
-            # If we have key terms, use them to find relevant chunks
-            if question_terms:
-                # Create a query that emphasizes the key terms
-                enhanced_query = " ".join(question_terms)
-                question_vector = self.vectorizer.transform([enhanced_query])
-            else:
-                # Fall back to the full question
-                question_vector = self.vectorizer.transform([cleaned_question])
-            
-            # Calculate similarities
-            similarities = cosine_similarity(question_vector, self.tfidf_matrix).flatten()
-            
-            # Get top 3 most relevant chunks (increased from 2 for better accuracy)
-            top_indices = np.argsort(similarities)[-3:][::-1]
-            relevant_chunks = [self.clean_chunks[i] for i in top_indices if similarities[i] > 0.05]
-            
-            if not relevant_chunks:
-                return ""
-            
-            return "\n\n".join(relevant_chunks)
-        except Exception as e:
-            print(f"Error in find_relevant_context: {str(e)}")
-            return ""
-
     def _get_pdf_answer(self, question: str) -> str:
-        """Get answer from PDF content"""
+        """Get answer from PDF content using TF-IDF to find relevant context."""
+        if not self.clean_chunks:
+            return ""
+        # Transform question into TF-IDF vector
+        question_vec = self.vectorizer.transform([question.lower()])
+        # Compute cosine similarities
+        similarities = cosine_similarity(question_vec, self.tfidf_matrix).flatten()
+        # Find index of most relevant chunk
+        most_relevant_idx = int(np.argmax(similarities))
+        max_similarity = similarities[most_relevant_idx]
+        # Check if similarity is above a threshold
+        if max_similarity < 0.1:
+            return ""
+        # Build context from the most relevant chunk
+        context = self.clean_chunks[most_relevant_idx]
+        # Query the LLM with the relevant context
         try:
-            # Find relevant context from PDF
-            pdf_context = self.find_relevant_context(question)
-            if pdf_context:
-                # Create prompt for PDF content
-                prompt = PromptTemplate(
-                    template="""You are a friendly and knowledgeable medical assistant. 
-                    Answer the question directly and concisely using the provided context.
-                    
-                    Guidelines:
-                    1. Give a direct answer in 1-2 sentences.
-                    2. Add 2-3 key supporting details.
-                    3. Use simple language.
-                    4. Explain any medical terms briefly.
-                    5. Stay focused and to the point.
-                    6. If the context doesn't contain enough information to answer the question, say so.
-
-                    Context: {context}
-
-                    Question: {question}
-
-                    Answer:""",
-                    input_variables=["context", "question"]
-                )
-                
-                # Create chain using RunnableSequence with optimized parameters
-                chain = (
-                    {"context": lambda x: pdf_context, "question": lambda x: x}
-                    | prompt
-                    | ChatGroq(
-                        api_key=os.getenv("GROQ_API_KEY"),
-                        model_name="llama-3.3-70b-versatile",
-                        temperature=0.3,  # Reduced for more focused answers
-                        max_tokens=512,  # Reduced for faster responses
-                        max_retries=1,   # Reduced retries
-                        request_timeout=15,  # Reduced timeout
-                        http_client=httpx.Client(timeout=15.0, follow_redirects=True),
-                        http_async_client=httpx.AsyncClient(timeout=15.0, follow_redirects=True)
-                    )
-                    | StrOutputParser()
-                )
-                
-                # Get response
-                response = chain.invoke(question)
-                return response.strip()
-            return None
+            chain = LLMChain(
+                llm=self.qa_chain.llm,
+                prompt=self.pdf_prompt,
+                output_parser=StrOutputParser()
+            )
+            response = chain.invoke({"context": context, "question": question})
+            # If response is a dict, extract the answer string
+            if isinstance(response, dict):
+                # Try common keys
+                answer = response.get('text') or response.get('output') or next(iter(response.values()), "")
+            else:
+                answer = response
+            # Ensure answer is a string
+            if not isinstance(answer, str):
+                answer = str(answer)
+            answer = answer.strip()
+            # Return the first 2-3 sentences for a balanced answer
+            sentences = re.split(r'(?<=[.!?]) +', answer)
+            return ' '.join(sentences[:3]).strip() if answer else ""
         except Exception as e:
-            print(f"Error in _get_pdf_answer: {str(e)}")
-            return None
+            print(f"Error getting PDF answer: {e}")
+            return ""
 
     def _get_wiki_answer(self, question: str) -> str:
-        """Get answer from Wikipedia content"""
+        """Get answer from Wikipedia as a fallback, but return a short, clear, and human-like summary (2-3 sentences)."""
         try:
-            # Get Wikipedia content
-            wiki_content = self.get_wikipedia_content(question)
-            if wiki_content:
-                # Create prompt for Wikipedia content
-                prompt = PromptTemplate(
-                    template="""You are a friendly and knowledgeable medical assistant. 
-                    Answer the question directly and concisely using the provided Wikipedia content.
-                    
-                    Guidelines:
-                    1. Give a direct answer in 1-2 sentences.
-                    2. Add 2-3 key supporting details.
-                    3. Use simple language.
-                    4. Explain any medical terms briefly.
-                    5. Stay focused and to the point.
-                    6. If the Wikipedia content doesn't contain enough information to answer the question, say so.
-
-                    Wikipedia Content: {context}
-
-                    Question: {question}
-
-                    Answer:""",
-                    input_variables=["context", "question"]
-                )
-                
-                # Create chain using RunnableSequence with optimized parameters
-                chain = (
-                    {"context": lambda x: wiki_content, "question": lambda x: x}
-                    | prompt
-                    | ChatGroq(
-                        api_key=os.getenv("GROQ_API_KEY"),
-                        model_name="llama-3.3-70b-versatile",
-                        temperature=0.3,  # Reduced for more focused answers
-                        max_tokens=512,  # Reduced for faster responses
-                        max_retries=1,   # Reduced retries
-                        request_timeout=15,  # Reduced timeout
-                        http_client=httpx.Client(timeout=15.0, follow_redirects=True),
-                        http_async_client=httpx.AsyncClient(timeout=15.0, follow_redirects=True)
-                    )
-                    | StrOutputParser()
-                )
-                
-                # Get response
-                response = chain.invoke(question)
-                return response.strip()
-            return None
+            search_term = question
+            # Check cache first
+            if search_term in self.wiki_cache:
+                content = self.wiki_cache[search_term]
+                # Return the first 2-3 sentences for a balanced answer
+                sentences = re.split(r'(?<=[.!?]) +', content)
+                return ' '.join(sentences[:3]).strip() if content else ""
+            # Attempt direct Wikipedia search
+            try:
+                page = wikipedia.page(search_term)
+                content = page.content
+                content = re.sub(r'\n', ' ', content)
+                self.wiki_cache[search_term] = content
+                sentences = re.split(r'(?<=[.!?]) +', content)
+                return ' '.join(sentences[:3]).strip() if content else ""
+            except wikipedia.DisambiguationError as e:
+                try:
+                    page = wikipedia.page(e.options[0])
+                    content = page.content
+                    content = re.sub(r'\n', ' ', content)
+                    self.wiki_cache[search_term] = content
+                    sentences = re.split(r'(?<=[.!?]) +', content)
+                    return ' '.join(sentences[:3]).strip() if content else ""
+                except:
+                    pass
+            except wikipedia.PageError:
+                pass
+            # If direct search fails, try search suggestions
+            try:
+                results = wikipedia.search(search_term, results=3)
+                if results:
+                    for title in results:
+                        try:
+                            page = wikipedia.page(title)
+                            content = page.content
+                            content = re.sub(r'\n', ' ', content)
+                            self.wiki_cache[search_term] = content
+                            sentences = re.split(r'(?<=[.!?]) +', content)
+                            return ' '.join(sentences[:3]).strip() if content else ""
+                        except:
+                            continue
+            except:
+                pass
+            # If nothing found
+            self.wiki_cache[search_term] = ""
+            return ""
         except Exception as e:
-            print(f"Error in _get_wiki_answer: {str(e)}")
-            return None
+            print(f"Error in Wikipedia fallback: {e}")
+            return ""
 
     def query(self, question: str, context: str = None) -> str:
         """Query the bot with a question and optional context from previous questions"""
@@ -524,87 +317,75 @@ class MedicalBot:
             is_follow_up = False
             if context and any(word in question.lower() for word in ["same", "it", "this", "that", "these", "those", "they", "them", "their", "its"]):
                 is_follow_up = True
-                
                 # Extract the main topic from the previous question
-                # First, try to find medical terms in the context
                 words = context.split()
                 medical_terms = []
-                
-                # Common medical prefixes and suffixes to help identify medical terms
                 medical_indicators = ["itis", "oma", "emia", "pathy", "algia", "derma", "itis", "oma", "osis", "pathy", "plasty", "rrhagia", "rrhaphy", "rrhea", "rrhexis", "sclerosis", "stasis", "tomy", "uria"]
-                
                 for i, word in enumerate(words):
-                    # Skip common words
                     if word.lower() in ["what", "is", "are", "the", "and", "for", "with", "about", "how", "why", "when", "where", "who", "which", "can", "you", "tell", "me", "more", "about", "explain", "describe", "list", "name", "give", "show", "provide", "information", "on", "regarding", "concerning", "related", "to"]:
                         continue
-                    
-                    # Check if word contains medical indicators
                     if any(indicator in word.lower() for indicator in medical_indicators):
                         medical_terms.append((i, word))
                         continue
-                    
-                    # Check if word is longer than 3 characters (likely a medical term)
                     if len(word) > 3:
                         medical_terms.append((i, word))
-                
-                # If we found medical terms, use the first one
                 if medical_terms:
                     main_topic = medical_terms[0][1]
                 else:
-                    # Fallback: use the first non-common word
                     for word in words:
                         if word.lower() not in ["what", "is", "are", "the", "and", "for", "with", "about", "how", "why", "when", "where", "who", "which"]:
                             main_topic = word
                             break
                     else:
-                        # If all else fails, use the first word
                         main_topic = words[0]
-                
-                # Combine the context with the current question
                 full_question = f"{main_topic} {question}"
             else:
                 full_question = question
 
             # Try to get answer from PDF first
             pdf_answer = self._get_pdf_answer(full_question)
+            # Check for generic/irrelevant PDF answers
+            irrelevant_patterns = [
+                r"no relevant answer", r"text does not mention", r"not found", r"no information", r"not discussed", r"not available", r"no data", r"no mention"
+            ]
+            is_irrelevant = False
             if pdf_answer:
+                for pat in irrelevant_patterns:
+                    if re.search(pat, pdf_answer, re.IGNORECASE):
+                        is_irrelevant = True
+                        break
+            if pdf_answer and not is_irrelevant:
                 self.add_to_history(question, pdf_answer, "PDF")
                 return pdf_answer
 
-            # If no PDF answer, try Wikipedia
+            # If no PDF answer or irrelevant, try Wikipedia
             wiki_answer = self._get_wiki_answer(full_question)
             if wiki_answer:
                 self.add_to_history(question, wiki_answer, "Wikipedia")
                 return wiki_answer
 
-            error_msg = "I apologize, but I couldn't find specific information about that in my medical knowledge base. Please try rephrasing your question or ask about a different medical topic."
-            self.add_to_history(question, error_msg, "None")
-            return error_msg
+            # If still no answer, try similar previous queries
+            similar = self.find_similar_previous_queries(question)
+            for item in similar:
+                if item and item.get("answer"):
+                    self.add_to_history(question, item["answer"], "History")
+                    return item["answer"]
+
+            # If all else fails, return a default message
+            default_msg = "I'm sorry, I couldn't find information on that."
+            self.add_to_history(question, default_msg, "None")
+            return default_msg
 
         except Exception as e:
-            error_msg = f"I apologize, but I encountered an error while processing your question: {str(e)}. Please try again."
-            print(f"Error in query: {str(e)}")
-            self.add_to_history(question, error_msg, "Error")
-            return error_msg
+            print(f"Error during query: {e}")
+            return "An error occurred while processing your question."
 
-    def delete_query(self, index: int) -> bool:
-        """Delete a specific query from history by index"""
-        try:
-            if 0 <= index < len(self.query_history):
-                del self.query_history[index]
-                self.save_history()
-                return True
-            return False
-        except Exception as e:
-            print(f"Error deleting query: {str(e)}")
-            return False
-    
     def clear_history(self) -> bool:
-        """Clear all queries from history"""
+        """Clear the query history and save the empty history to file."""
         try:
             self.query_history = []
             self.save_history()
             return True
         except Exception as e:
-            print(f"Error clearing history: {str(e)}")
+            print(f"Error clearing history: {e}")
             return False
