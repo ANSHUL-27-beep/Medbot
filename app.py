@@ -298,8 +298,11 @@ def main():
     # Initialize bot with loading indicator
     if st.session_state.bot is None:
         with st.spinner("Initializing medical knowledge base... This may take a minute..."):
-            pdf_path = "Gale Encyclopedia of Medicine. Vol. 2. 2nd ed.pdf"
-            st.session_state.bot = MedicalBot(pdf_path)
+            pdf_paths = [
+                "Gale Encyclopedia of Medicine. Vol. 2. 2nd ed.pdf",
+                "Gale Encyclopedia of Medicine. Vol. 1. 2nd ed (1).pdf"
+            ]
+            st.session_state.bot = MedicalBot(pdf_paths)
     
     # Sidebar for query history
     with st.sidebar:
@@ -474,3 +477,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
