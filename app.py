@@ -298,7 +298,7 @@ def main():
     # Initialize bot with loading indicator
     if st.session_state.bot is None:
         with st.spinner("Initializing medical knowledge base... This may take a minute..."):
-            pdf_path = "gale_encyclopedia_of_medicine_vol_1.pdf"
+            pdf_path = "Gale Encyclopedia of Medicine. Vol. 2. 2nd ed.pdf"
             st.session_state.bot = MedicalBot(pdf_path)
     
     # Sidebar for query history
@@ -336,7 +336,6 @@ def main():
                     
                     # Delete button for each history item
                     if st.button(f"🗑️ Delete", key=f"delete_{i}"):
-                        # Calculate the actual index in the original list
                         actual_index = len(recent_history) - 1 - i
                         if st.session_state.bot.delete_query(actual_index):
                             st.success("Query deleted successfully!")
@@ -437,9 +436,7 @@ def main():
                     """, unsafe_allow_html=True)
             
             # Get the actual response with context
-            # Pass both the last question and the current question for better context
             context = st.session_state.last_question if st.session_state.last_question else None
-            
             # Check if this is a follow-up question
             is_follow_up = False
             if context and any(word in prompt.lower() for word in ["same", "it", "this", "that", "these", "those", "they", "them", "their", "its"]):
@@ -462,20 +459,18 @@ def main():
             
             # Display response with animation
             response_placeholder.markdown(f"""
+            <div class="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            """, unsafe_allow_html=True)
+            time.sleep(0.5)
+            response_placeholder.markdown(f"""
             <div class="chat-message assistant">
                 <div class="content">{response}</div>
             </div>
             """, unsafe_allow_html=True)
-        
-        # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        
-        # Auto-scroll to bottom
-        time.sleep(0.1)  # Small delay to ensure content is rendered
-        st.rerun()
-
-    # Add a spacer at the bottom to ensure the input is always visible
-    st.markdown("<div style='height: 100px'></div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    main() 
+    main()
