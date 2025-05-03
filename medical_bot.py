@@ -106,29 +106,26 @@ class MedicalBot:
         return similar_queries
 
     def setup(self):
-        """Initialize the bot by loading and processing the PDFs"""
+        """Initialize the bot by loading and processing the PDFs, only rebuilding cache if PDFs have changed."""
         cache_file = "medical_bot_cache.pkl"
-        # Remove old cache to ensure new PDFs are processed
-        if os.path.exists(cache_file):
-            try:
-                os.remove(cache_file)
-                print("Old cache removed. Reprocessing PDFs.")
-            except Exception as e:
-                print(f"Error removing old cache: {e}")
-        # Check if cached data exists
+        pdf_timestamps = {pdf: os.path.getmtime(pdf) for pdf in self.pdf_paths}
+        cache_valid = False
+        # Check if cached data exists and is valid
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'rb') as f:
                     cached_data = pickle.load(f)
-                    self.clean_chunks = cached_data['clean_chunks']
-                    self.tfidf_matrix = cached_data['tfidf_matrix']
-                    self.vectorizer = cached_data['vectorizer']
-                    print("Loaded cached data successfully")
-                    self._setup_llm()
-                    return
+                    cached_timestamps = cached_data.get('pdf_timestamps', {})
+                    if cached_timestamps == pdf_timestamps:
+                        self.clean_chunks = cached_data['clean_chunks']
+                        self.tfidf_matrix = cached_data['tfidf_matrix']
+                        self.vectorizer = cached_data['vectorizer']
+                        print("Loaded cached data successfully")
+                        self._setup_llm()
+                        return
             except Exception as e:
                 print(f"Error loading cache: {e}")
-        # Load all PDFs
+        # If cache is not valid, process PDFs
         self.documents = []
         for pdf_path in self.pdf_paths:
             loader = PyPDFLoader(pdf_path)
@@ -152,13 +149,14 @@ class MedicalBot:
                 self.clean_chunks.append(cleaned_text)
         # Create TF-IDF vectors for all chunks
         self.tfidf_matrix = self.vectorizer.fit_transform(self.clean_chunks)
-        # Cache the processed data
+        # Cache the processed data and PDF timestamps
         try:
             with open(cache_file, 'wb') as f:
                 pickle.dump({
                     'clean_chunks': self.clean_chunks,
                     'tfidf_matrix': self.tfidf_matrix,
-                    'vectorizer': self.vectorizer
+                    'vectorizer': self.vectorizer,
+                    'pdf_timestamps': pdf_timestamps
                 }, f)
             print("Cached data saved successfully")
         except Exception as e:
