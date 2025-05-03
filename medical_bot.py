@@ -27,8 +27,10 @@ wikipedia.set_lang("en")
 load_dotenv()
 
 class MedicalBot:
-    def __init__(self, pdf_path: str):
-        self.pdf_path = pdf_path
+    def __init__(self, pdf_paths):
+        if isinstance(pdf_paths, str):
+            pdf_paths = [pdf_paths]
+        self.pdf_paths = pdf_paths
         self.documents = []
         self.qa_chain = None
         self.vectorizer = TfidfVectorizer(
@@ -104,13 +106,13 @@ class MedicalBot:
         return similar_queries
 
     def setup(self):
-        """Initialize the bot by loading and processing the PDF"""
+        """Initialize the bot by loading and processing the PDFs"""
         cache_file = "medical_bot_cache.pkl"
-        # Remove old cache to ensure new PDF is processed
+        # Remove old cache to ensure new PDFs are processed
         if os.path.exists(cache_file):
             try:
                 os.remove(cache_file)
-                print("Old cache removed. Reprocessing PDF.")
+                print("Old cache removed. Reprocessing PDFs.")
             except Exception as e:
                 print(f"Error removing old cache: {e}")
         # Check if cached data exists
@@ -126,11 +128,11 @@ class MedicalBot:
                     return
             except Exception as e:
                 print(f"Error loading cache: {e}")
-        
-        # Load PDF
-        loader = PyPDFLoader(self.pdf_path)
-        self.documents = loader.load()
-        
+        # Load all PDFs
+        self.documents = []
+        for pdf_path in self.pdf_paths:
+            loader = PyPDFLoader(pdf_path)
+            self.documents.extend(loader.load())
         # Split documents into chunks with smaller size and less overlap
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,  # Reduced from 2000
@@ -139,7 +141,6 @@ class MedicalBot:
             separators=["\n\n", "\n", ".", " ", ""]
         )
         self.splits = text_splitter.split_documents(self.documents)
-        
         # Clean and prepare chunks for vectorization
         self.clean_chunks = []
         for chunk in self.splits:
@@ -149,10 +150,8 @@ class MedicalBot:
             cleaned_text = re.sub(r'\s+', ' ', chunk_text).strip()
             if cleaned_text and len(cleaned_text) > 50:
                 self.clean_chunks.append(cleaned_text)
-        
         # Create TF-IDF vectors for all chunks
         self.tfidf_matrix = self.vectorizer.fit_transform(self.clean_chunks)
-        
         # Cache the processed data
         try:
             with open(cache_file, 'wb') as f:
@@ -164,7 +163,6 @@ class MedicalBot:
             print("Cached data saved successfully")
         except Exception as e:
             print(f"Error saving cache: {e}")
-        
         self._setup_llm()
 
     def _setup_llm(self):
@@ -389,3 +387,4 @@ class MedicalBot:
         except Exception as e:
             print(f"Error clearing history: {e}")
             return False
+
